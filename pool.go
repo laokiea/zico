@@ -20,7 +20,7 @@ type Pool struct {
 	cancel                  context.CancelFunc
 }
 
-func (p *Pool) NewPool(cap uint32) (pool *Pool) {
+func NewPool(cap uint32) (pool *Pool) {
 	pool = &Pool{
 		capacity:    cap,
 		runnings:    0,
