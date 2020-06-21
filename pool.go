@@ -36,7 +36,7 @@ func NewPool(cap uint32) (pool *Pool) {
 	return
 }
 
-func (p *Pool) SubmitWork(f func()) {
+func (p *Pool) SubmitWork(f ...func()) {
 	// workers is idle
 	if len(p.close) == 1 {
 		fmt.Println("pool closed")
@@ -44,34 +44,26 @@ func (p *Pool) SubmitWork(f func()) {
 	}
 
 	worker := p.getWorker()
-	worker.task(f)
+	for _,_f := range f {
+		worker.tasks<- _f
+ 	}
+	worker.task()
 }
 
 func (p *Pool) getWorker() (worker *Worker) {
-	p.mutex.Lock()
-	defer p.mutex.Unlock()
-
 	if atomic.LoadUint32(&p.runnings) == p.capacity {
 		<-p.available
 		worker = p.getWaitWorker()
-
-		if worker == nil {
-			p.mutex.Unlock()
-			worker = p.getWorker()
-		}  else {
-			atomic.AddUint32(&p.runnings, 1)
-			atomic.StoreUint32(&worker.isRunning, 1)
-		}
+		atomic.AddUint32(&p.runnings, 1)
+		atomic.StoreUint32(&worker.isRunning, 1)
 	} else {
 		atomic.AddUint32(&p.runnings, 1)
 		l := len(p.workers)
 
 		if uint32(l) < p.capacity {
-			worker = &Worker{
-				index: uint32(l),
-				isRunning: 1,
-				pool: p,
-			}
+			defer p.mutex.Unlock()
+			p.mutex.Lock()
+			worker = NewWorker(p, uint32(l))
 			p.workers = p.workers[:l+1]
 			p.workers[l] = worker
 		} else {
@@ -79,17 +71,20 @@ func (p *Pool) getWorker() (worker *Worker) {
 		}
 	}
 
-	return worker
+	return
 }
 
 func (p *Pool) getWaitWorker() (worker *Worker) {
-	if worker = p.waitWorkers.Get().(*Worker); worker == nil {
+	if w := p.waitWorkers.Get(); w == nil {
 		// 有可能被gc回收掉临时池里的可用worker，导致worker为nil
-		for _,w := range p.workers {
-			if w.isRunning == 0 {
-				worker = w
+		for _,_w := range p.workers {
+			if _w.isRunning == 0 {
+				worker = _w
+				break
 			}
 		}
+	} else {
+		worker = w.(*Worker)
 	}
 
 	return
