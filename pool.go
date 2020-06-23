@@ -4,8 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"os/signal"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 
@@ -62,6 +65,8 @@ func NewPool(cap uint32) (pool *Pool) {
 		}
 		return uint8(1 << i)
 	} (cap)
+
+	go pool.waitQuitSignal()
 	go pool.startLogStatusTicker()
 
 	return
@@ -158,21 +163,29 @@ func (p *Pool) startLogStatusTicker() {
 	for {
 		select {
 		case <- ticker.C:
-			if err := p.logPoolStatus(); err != nil {
-				log.Error(err)
-			}
+			p.logPoolStatus()
 		}
 	}
 }
 
-func (p *Pool) logPoolStatus() error {
+func (p *Pool) logPoolStatus() {
 	// single goroutine
 	poolLog, err := json.Marshal(p.poolStatus)
 	if err != nil {
-		return err
+		log.Error(err)
+		return
 	}
 
 	log.Info(poolLog)
+}
 
-	return nil
+func (p *Pool) waitQuitSignal() {
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, os.Interrupt, syscall.SIGTERM)
+
+	select {
+		case <-quit:
+			p.logPoolStatus()
+			return
+	}
 }
