@@ -7,6 +7,9 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+
+	log "github.com/sirupsen/logrus"
 )
 
 type PoolStatus struct {
@@ -31,6 +34,8 @@ type Pool struct {
 	poolStatus              *PoolStatus
 	logStatusTick           uint8
 }
+
+var ticker *time.Ticker
 
 func NewPool(cap uint32) (pool *Pool) {
 	pool = &Pool{
@@ -145,25 +150,29 @@ func (p *Pool) getOriginWorker() (worker *Worker) {
 
 func (p *Pool) Close() {
 	p.close<- struct{}{}
+	ticker.Stop()
 }
 
 func (p *Pool) startLogStatusTicker() {
-	ticker := time.NewTicker(time.Second * time.Duration(p.logStatusTick))
+	ticker = time.NewTicker(time.Second * time.Duration(p.logStatusTick))
 	for {
 		select {
 		case <- ticker.C:
-			p.logPoolStatus()
+			if err := p.logPoolStatus(); err != nil {
+				log.Error(err)
+			}
 		}
 	}
 }
 
 func (p *Pool) logPoolStatus() error {
 	// single goroutine
-	log, err := json.Marshal(p.poolStatus)
+	poolLog, err := json.Marshal(p.poolStatus)
 	if err != nil {
 		return err
 	}
-	fmt.Println(log)
+
+	log.Info(poolLog)
 
 	return nil
 }
