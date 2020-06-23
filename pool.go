@@ -2,10 +2,18 @@ package zico
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sync"
 	"sync/atomic"
+	"time"
 )
+
+type PoolStatus struct {
+	ExecTasksNum            uint32 `json:"exec_tasks_num"`
+	ResizeTimes             uint8  `json:"resize_times"`
+	MaxWorkersNum           uint32 `json:"max_worker_num"`
+}
 
 type Pool struct {
 	capacity      			uint32
@@ -15,23 +23,41 @@ type Pool struct {
 	available     			chan struct{}
 	close       			chan struct{}
 	mutex         			sync.Mutex
-	waitWorkers             sync.Pool
 	ctx                     context.Context
 	cancel                  context.CancelFunc
+	waitWorkers             sync.Pool
+	withSyncPool            bool
+	withLogPoolstatus       bool
+	poolStatus              *PoolStatus
+	logStatusTick           uint8
 }
 
 func NewPool(cap uint32) (pool *Pool) {
 	pool = &Pool{
-		capacity:    cap,
-		runnings:    0,
-		workers:     make([]*Worker, 0, cap),
-		mutex:       sync.Mutex{},
-		available:   make(chan struct{}),
-		close:       make(chan struct{}, 1),
-		waitWorkers: sync.Pool{},
+		capacity:      cap,
+		runnings:      0,
+		workers:       make([]*Worker, 0, cap),
+		mutex:         sync.Mutex{},
+		available:     make(chan struct{}),
+		close:         make(chan struct{}, 1),
+		poolStatus:    new(PoolStatus),
 	}
+
+	pool.poolStatus.MaxWorkersNum = cap
 	pool.ctx,pool.cancel = context.WithCancel(context.Background())
 	pool.waitWorkers.New = nil
+
+	pool.logStatusTick = func(cap uint32) uint8 {
+		i := 1
+		for {
+			if uint32(1 << i) > cap {
+				break
+			}
+			i++
+		}
+		return uint8(1 << i)
+	} (cap)
+	go pool.startLogStatusTicker()
 
 	return
 }
@@ -50,10 +76,21 @@ func (p *Pool) SubmitWork(f ...func()) {
 	worker.task()
 }
 
+func (p *Pool) WithSyncPool(with bool) {
+	p.withSyncPool = with
+	if p.withSyncPool == true {
+		p.waitWorkers = sync.Pool{}
+	}
+}
+
+func (p *Pool) WithLogPoolStatus(with bool) {
+	p.withLogPoolstatus = with;
+}
+
 func (p *Pool) getWorker() (worker *Worker) {
 	if atomic.LoadUint32(&p.runnings) == p.capacity {
 		<-p.available
-		worker = p.getWaitWorker()
+		worker = p.getAvailableWorker()
 		atomic.AddUint32(&p.runnings, 1)
 		atomic.StoreUint32(&worker.isRunning, 1)
 	} else {
@@ -67,8 +104,18 @@ func (p *Pool) getWorker() (worker *Worker) {
 			p.workers = p.workers[:l+1]
 			p.workers[l] = worker
 		} else {
-			worker = p.getWaitWorker()
+			worker = p.getAvailableWorker()
 		}
+	}
+
+	return
+}
+
+func (p *Pool) getAvailableWorker() (worker *Worker) {
+	if p.withSyncPool == true {
+		worker = p.getWaitWorker()
+	} else {
+		worker = p.getAvailableWorker()
 	}
 
 	return
@@ -77,12 +124,7 @@ func (p *Pool) getWorker() (worker *Worker) {
 func (p *Pool) getWaitWorker() (worker *Worker) {
 	if w := p.waitWorkers.Get(); w == nil {
 		// 有可能被gc回收掉临时池里的可用worker，导致worker为nil
-		for _,_w := range p.workers {
-			if _w.isRunning == 0 {
-				worker = _w
-				break
-			}
-		}
+		worker = p.getOriginWorker()
 	} else {
 		worker = w.(*Worker)
 	}
@@ -90,6 +132,38 @@ func (p *Pool) getWaitWorker() (worker *Worker) {
 	return
 }
 
+func (p *Pool) getOriginWorker() (worker *Worker) {
+	for _,_w := range p.workers {
+		if _w.isRunning == 0 {
+			worker = _w
+			break
+		}
+	}
+
+	return
+}
+
 func (p *Pool) Close() {
 	p.close<- struct{}{}
+}
+
+func (p *Pool) startLogStatusTicker() {
+	ticker := time.NewTicker(time.Second * time.Duration(p.logStatusTick))
+	for {
+		select {
+		case <- ticker.C:
+			p.logPoolStatus()
+		}
+	}
+}
+
+func (p *Pool) logPoolStatus() error {
+	// single goroutine
+	log, err := json.Marshal(p.poolStatus)
+	if err != nil {
+		return err
+	}
+	fmt.Println(log)
+
+	return nil
 }

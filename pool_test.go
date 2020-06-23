@@ -9,6 +9,7 @@ import (
 
 func TestPool_SubmitWork(t *testing.T) {
 	pool := NewPool(3)
+	pool.WithSyncPool(false)
 	var wg sync.WaitGroup
 	for i := 0;i < 5;i++ {
 		wg.Add(1)

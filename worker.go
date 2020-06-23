@@ -40,6 +40,7 @@ func (w *Worker) task() {
 				return
 			}
 			f()
+			atomic.AddUint32(&w.pool.poolStatus.ExecTasksNum, 1)
 			if l := len(w.tasks); l == 0 {
 				return
 			}
