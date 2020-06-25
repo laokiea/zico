@@ -11,14 +11,17 @@ import (
 	"syscall"
 	"time"
 
-
+	"github.com/satori/go.uuid"
 	log "github.com/sirupsen/logrus"
 )
 
+type PoolIdType [16]byte
+
 type PoolStatus struct {
-	ExecTasksNum            uint32 `json:"exec_tasks_num"`
-	ResizeTimes             uint8  `json:"resize_times"`
-	MaxWorkersNum           uint32 `json:"max_worker_num"`
+	ExecTasksNum            uint32      `json:"exec_tasks_num"`
+	ResizeTimes             uint8       `json:"resize_times"`
+	MaxWorkersNum           uint32      `json:"max_worker_num"`
+	PoolId                  PoolIdType  `json:"pool_id"`
 }
 
 type Pool struct {
@@ -38,7 +41,14 @@ type Pool struct {
 	logStatusTick           uint8
 }
 
-var ticker *time.Ticker
+const (
+	LogDir string = "/data/logs/"
+)
+
+var (
+	ticker  *time.Ticker
+	quit    chan os.Signal
+)
 
 func NewPool(cap uint32) (pool *Pool) {
 	pool = &Pool{
@@ -52,6 +62,7 @@ func NewPool(cap uint32) (pool *Pool) {
 	}
 
 	pool.poolStatus.MaxWorkersNum = cap
+	pool.poolStatus.PoolId = PoolIdType(uuid.NewV4())
 	pool.ctx,pool.cancel = context.WithCancel(context.Background())
 	pool.waitWorkers.New = nil
 
@@ -63,11 +74,10 @@ func NewPool(cap uint32) (pool *Pool) {
 			}
 			i++
 		}
-		return uint8(1 << i)
+		return uint8(1 << i) - 1
 	} (cap)
 
 	go pool.waitQuitSignal()
-	go pool.startLogStatusTicker()
 
 	return
 }
@@ -88,13 +98,16 @@ func (p *Pool) SubmitWork(f ...func()) {
 
 func (p *Pool) WithSyncPool(with bool) {
 	p.withSyncPool = with
-	if p.withSyncPool == true {
+	if p.withSyncPool {
 		p.waitWorkers = sync.Pool{}
 	}
 }
 
 func (p *Pool) WithLogPoolStatus(with bool) {
-	p.withLogPoolstatus = with;
+	p.withLogPoolstatus = with
+	if p.withLogPoolstatus {
+		go p.startLogStatusTicker()
+	}
 }
 
 func (p *Pool) getWorker() (worker *Worker) {
@@ -122,10 +135,10 @@ func (p *Pool) getWorker() (worker *Worker) {
 }
 
 func (p *Pool) getAvailableWorker() (worker *Worker) {
-	if p.withSyncPool == true {
+	if p.withSyncPool {
 		worker = p.getWaitWorker()
 	} else {
-		worker = p.getAvailableWorker()
+		worker = p.getOriginWorker()
 	}
 
 	return
@@ -144,7 +157,7 @@ func (p *Pool) getWaitWorker() (worker *Worker) {
 
 func (p *Pool) getOriginWorker() (worker *Worker) {
 	for _,_w := range p.workers {
-		if _w.isRunning == 0 {
+		if atomic.LoadUint32(&_w.isRunning) == 0 {
 			worker = _w
 			break
 		}
@@ -155,7 +168,14 @@ func (p *Pool) getOriginWorker() (worker *Worker) {
 
 func (p *Pool) Close() {
 	p.close<- struct{}{}
-	ticker.Stop()
+	signal.Stop(quit)
+	if ticker != nil {
+		ticker.Stop()
+	}
+
+	if p.withLogPoolstatus {
+		p.logPoolStatus()
+	}
 }
 
 func (p *Pool) startLogStatusTicker() {
@@ -170,22 +190,38 @@ func (p *Pool) startLogStatusTicker() {
 
 func (p *Pool) logPoolStatus() {
 	// single goroutine
-	poolLog, err := json.Marshal(p.poolStatus)
+	statusLog, err := json.Marshal(p.poolStatus)
 	if err != nil {
 		log.Error(err)
 		return
 	}
 
-	log.Info(poolLog)
+	file, err := os.OpenFile(LogDir+"pool_status.log", os.O_CREATE | os.O_WRONLY | os.O_APPEND, 0666)
+	if err != nil {
+		log.Fatal(err)
+		return
+	}
+
+	log.SetOutput(file)
+	log.WithFields(log.Fields{
+		"time": time.Now().String(),
+	}).Info(string(statusLog))
 }
 
 func (p *Pool) waitQuitSignal() {
-	quit := make(chan os.Signal, 1)
+	quit = make(chan os.Signal, 1)
 	signal.Notify(quit, os.Interrupt, syscall.SIGTERM)
 
 	select {
 		case <-quit:
-			p.logPoolStatus()
-			return
+			if p.withLogPoolstatus {
+				p.logPoolStatus()
+			}
+			os.Exit(0)
 	}
+}
+
+func (b PoolIdType) MarshalText() ([]byte, error) {
+	fmt.Println(b)
+	return []byte{111}, nil
 }
