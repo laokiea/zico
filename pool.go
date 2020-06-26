@@ -112,10 +112,12 @@ func (p *Pool) WithLogPoolStatus(with bool) {
 
 func (p *Pool) getWorker() (worker *Worker) {
 	if atomic.LoadUint32(&p.runnings) == p.capacity {
-		<-p.available
-		worker = p.getAvailableWorker()
-		atomic.AddUint32(&p.runnings, 1)
-		atomic.StoreUint32(&worker.isRunning, 1)
+		select {
+		case <- p.available:
+			worker = p.getAvailableWorker()
+			atomic.AddUint32(&p.runnings, 1)
+			atomic.StoreUint32(&worker.isRunning, 1)
+		}
 	} else {
 		atomic.AddUint32(&p.runnings, 1)
 		l := len(p.workers)
