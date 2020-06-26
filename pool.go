@@ -15,13 +15,11 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-type PoolIdType [16]byte
-
 type PoolStatus struct {
 	ExecTasksNum            uint32      `json:"exec_tasks_num"`
 	ResizeTimes             uint8       `json:"resize_times"`
 	MaxWorkersNum           uint32      `json:"max_worker_num"`
-	PoolId                  PoolIdType  `json:"pool_id"`
+	PoolId                  string      `json:"pool_id"`
 }
 
 type Pool struct {
@@ -40,6 +38,8 @@ type Pool struct {
 	poolStatus              *PoolStatus
 	logStatusTick           uint8
 }
+
+type PoolIdType uuid.UUID
 
 const (
 	LogDir string = "/data/logs/"
@@ -62,7 +62,7 @@ func NewPool(cap uint32) (pool *Pool) {
 	}
 
 	pool.poolStatus.MaxWorkersNum = cap
-	pool.poolStatus.PoolId = PoolIdType(uuid.NewV4())
+	pool.poolStatus.PoolId = uuid.NewV4().String()
 	pool.ctx,pool.cancel = context.WithCancel(context.Background())
 	pool.waitWorkers.New = nil
 
@@ -221,7 +221,6 @@ func (p *Pool) waitQuitSignal() {
 	}
 }
 
-func (b PoolIdType) MarshalText() ([]byte, error) {
-	fmt.Println(b)
-	return []byte{111}, nil
+func (pit PoolIdType) MarshalJSON() ([]byte, error) {
+	return []byte{}, nil
 }
