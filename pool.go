@@ -4,15 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/satori/go.uuid"
+	log "github.com/sirupsen/logrus"
 	"os"
 	"os/signal"
 	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
-
-	"github.com/satori/go.uuid"
-	log "github.com/sirupsen/logrus"
 )
 
 type PoolStatus struct {
@@ -34,7 +33,7 @@ type Pool struct {
 	cancel                  context.CancelFunc
 	waitWorkers             sync.Pool
 	withSyncPool            bool
-	withLogPoolstatus       bool
+	withLogPoolStatus       bool
 	poolStatus              *PoolStatus
 	logStatusTick           uint8
 }
@@ -52,13 +51,15 @@ var (
 
 func NewPool(cap uint32) (pool *Pool) {
 	pool = &Pool{
-		capacity:      cap,
-		runnings:      0,
-		workers:       make([]*Worker, 0, cap),
-		mutex:         sync.Mutex{},
-		available:     make(chan struct{}),
-		close:         make(chan struct{}, 1),
-		poolStatus:    new(PoolStatus),
+		capacity:           cap,
+		runnings:           0,
+		workers:            make([]*Worker, 0, cap),
+		mutex:              sync.Mutex{},
+		available:          make(chan struct{}),
+		close:              make(chan struct{}, 1),
+		poolStatus:         new(PoolStatus),
+		withSyncPool:       true,
+		withLogPoolStatus:  true,
 	}
 
 	pool.poolStatus.MaxWorkersNum = cap
@@ -77,9 +78,18 @@ func NewPool(cap uint32) (pool *Pool) {
 		return uint8(1 << i) - 1
 	} (cap)
 
+	// 如果PoolConfig的方法里有指针接受者,那么作为Config接口的实现，必须以指针传入
+	poolConfig := NewPoolConfig()
+	pool.ParseFlag(poolConfig)
+
 	go pool.waitQuitSignal()
 
 	return
+}
+
+func (p *Pool) ParseFlag(config Config) {
+	config.parse()
+	config.set(p)
 }
 
 func (p *Pool) SubmitWork(f ...func()) {
@@ -104,8 +114,8 @@ func (p *Pool) WithSyncPool(with bool) {
 }
 
 func (p *Pool) WithLogPoolStatus(with bool) {
-	p.withLogPoolstatus = with
-	if p.withLogPoolstatus {
+	p.withLogPoolStatus = with
+	if p.withLogPoolStatus {
 		go p.startLogStatusTicker()
 	}
 }
@@ -175,7 +185,7 @@ func (p *Pool) Close() {
 		ticker.Stop()
 	}
 
-	if p.withLogPoolstatus {
+	if p.withLogPoolStatus {
 		p.logPoolStatus()
 	}
 }
@@ -216,7 +226,7 @@ func (p *Pool) waitQuitSignal() {
 
 	select {
 		case <-quit:
-			if p.withLogPoolstatus {
+			if p.withLogPoolStatus {
 				p.logPoolStatus()
 			}
 			os.Exit(0)
