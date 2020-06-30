@@ -49,6 +49,16 @@ var (
 	quit    chan os.Signal
 )
 
+func init() {
+	file, err := os.OpenFile(LogDir+"pool_status.log", os.O_CREATE | os.O_WRONLY | os.O_APPEND, 0666)
+	if err != nil {
+		log.Fatal(err)
+		return
+	}
+
+	log.SetOutput(file)
+}
+
 func NewPool(cap uint32) (pool *Pool) {
 	pool = &Pool{
 		capacity:           cap,
@@ -208,15 +218,8 @@ func (p *Pool) logPoolStatus() {
 		return
 	}
 
-	file, err := os.OpenFile(LogDir+"pool_status.log", os.O_CREATE | os.O_WRONLY | os.O_APPEND, 0666)
-	if err != nil {
-		log.Fatal(err)
-		return
-	}
-
-	log.SetOutput(file)
 	log.WithFields(log.Fields{
-		"time": time.Now().String(),
+		"time": time.Now().Format("20060102 15:04:05"),
 	}).Info(string(statusLog))
 }
 
